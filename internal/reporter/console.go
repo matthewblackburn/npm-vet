@@ -10,6 +10,17 @@ import (
 	"github.com/matthewblackburn/npm-vet/internal/npmvet"
 )
 
+// IsTerminal returns true if stdin is attached to a real terminal (TTY).
+// AI agents and scripts run commands with piped stdin, which is NOT a TTY.
+// This distinction is reliable and cannot be faked by a subprocess.
+func IsTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
 // ANSI color codes
 const (
 	reset   = "\033[0m"

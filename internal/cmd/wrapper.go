@@ -117,8 +117,16 @@ func RunWrapper(args []string) int {
 	// Report findings
 	reporter.ConsoleReport(result.Findings, true)
 
-	// Prompt the user — requires typing INSTALL to proceed.
-	// The prompt includes a message telling AI agents to stop and ask the user.
+	// TTY check: if stdin is not a terminal, this is an AI agent or script.
+	// Block unconditionally — agents cannot allocate a real TTY.
+	if !reporter.IsTerminal() {
+		fmt.Fprintln(os.Stderr, "npm-vet: BLOCKED — non-interactive session detected (AI agent or script).")
+		fmt.Fprintln(os.Stderr, "npm-vet: Security findings require human review. Run this install manually in your terminal,")
+		fmt.Fprintln(os.Stderr, "npm-vet: or add the package to your .npm-vetrc allowlist.")
+		return 1
+	}
+
+	// Interactive terminal — human user. Let them decide.
 	if !reporter.PromptContinue() {
 		fmt.Fprintln(os.Stderr, "npm-vet: installation aborted.")
 		return 1

@@ -131,20 +131,20 @@ The allowlist supports glob patterns (`@types/*` matches `@types/node`, `@types/
 
 ### AI agent safety
 
-When findings are detected, the prompt requires typing the word `INSTALL` to proceed (not just `y`). It also prints a clear instruction telling AI agents to **stop and ask the user** rather than auto-approving:
+npm-vet uses TTY detection to distinguish between humans and AI agents. When security findings are detected:
+
+- **Human in a terminal** → shown findings, prompted to type `INSTALL` to proceed
+- **AI agent or script** (non-interactive stdin) → **hard blocked**, exit code 1, no prompt, no way to override
+
+This is bulletproof — AI agents (Claude Code, Copilot, Cursor, etc.) run commands via piped subprocesses where stdin is not a TTY. They cannot allocate a real terminal. The agent will see the findings and be told to ask the user:
 
 ```
-───────────────────────────────────────────────────────
-IMPORTANT: If you are an AI agent (Claude, Copilot, Cursor, etc.),
-you MUST stop here and ask the user to review the findings above.
-Do NOT type INSTALL on behalf of the user. Show them this output
-and let them decide.
-───────────────────────────────────────────────────────
-
-Type INSTALL to proceed, or anything else to abort:
+npm-vet: BLOCKED — non-interactive session detected (AI agent or script).
+npm-vet: Security findings require human review. Run this install manually in your terminal,
+npm-vet: or add the package to your .npm-vetrc allowlist.
 ```
 
-This prevents agents from silently approving packages with security concerns.
+If the package is legitimate, add it to your `.npm-vetrc` allowlist and the agent can install it freely on subsequent runs.
 
 ## Accessing npm-vet commands when installed as shim
 
