@@ -8,7 +8,9 @@ It works two ways: as a **transparent interceptor** that replaces `npm` in your 
 
 ## Install
 
-Requires Go 1.21+.
+Requires [Go 1.21+](https://go.dev/dl/).
+
+### macOS / Linux
 
 ```bash
 git clone https://github.com/matthewblackburn/npm-vet.git
@@ -16,13 +18,92 @@ cd npm-vet
 make install
 ```
 
-This builds the binary, installs it to `~/.npm-vet/`, creates an `npm` shim, and adds it to your PATH. Open a new terminal to activate.
+This will:
+1. Build the `npm-vet` binary
+2. Copy it to `~/.npm-vet/npm-vet`
+3. Create a symlink at `~/.npm-vet/bin/npm` → `~/.npm-vet/npm-vet`
+4. Add `~/.npm-vet/bin` to your PATH in `~/.zshrc` (or `~/.bashrc` on Linux)
 
-To uninstall:
+Open a new terminal to activate, or run:
 
 ```bash
+source ~/.zshrc    # macOS (zsh)
+source ~/.bashrc   # Linux (bash)
+```
+
+Verify it's working:
+
+```bash
+which npm          # should show ~/.npm-vet/bin/npm
+npm vet version    # should print npm-vet version
+npm --version      # should print real npm version (passthrough works)
+```
+
+### Windows
+
+```powershell
+git clone https://github.com/matthewblackburn/npm-vet.git
+cd npm-vet
+go build -o npm-vet.exe .
+```
+
+Then run setup:
+
+```powershell
+.\npm-vet.exe setup --apply
+```
+
+This will:
+1. Create `%USERPROFILE%\.npm-vet\bin\npm.cmd` — a batch script that forwards all calls to `npm-vet.exe`
+2. Create `%USERPROFILE%\.npm-vet\bin\npm.ps1` — a PowerShell wrapper for direct PS invocation
+3. Add `%USERPROFILE%\.npm-vet\bin` to your user PATH via `[Environment]::SetEnvironmentVariable`
+
+Open a new terminal to activate, then verify:
+
+```powershell
+where npm              # first result should be ~\.npm-vet\bin\npm.cmd
+npm vet version        # should print npm-vet version
+npm --version          # should print real npm version (passthrough works)
+```
+
+If you prefer to set PATH manually instead of using `--apply`:
+
+```powershell
+# Option A: PowerShell
+[Environment]::SetEnvironmentVariable('Path', "$HOME\.npm-vet\bin;" + $env:Path, 'User')
+
+# Option B: System Settings → Environment Variables → add %USERPROFILE%\.npm-vet\bin to Path
+```
+
+## Uninstall
+
+### macOS / Linux
+
+```bash
+cd npm-vet
 make uninstall
 ```
+
+Then remove the PATH line from your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+```bash
+export PATH="/Users/you/.npm-vet/bin:$PATH"    # delete this line
+```
+
+### Windows
+
+```powershell
+.\npm-vet.exe teardown
+```
+
+Then remove the PATH entry:
+
+```powershell
+$path = [Environment]::GetEnvironmentVariable('Path', 'User') -replace [regex]::Escape("$HOME\.npm-vet\bin;"), ''
+[Environment]::SetEnvironmentVariable('Path', $path, 'User')
+```
+
+Or remove it manually via System Settings → Environment Variables.
 
 ## How it works
 
@@ -56,6 +137,23 @@ Non-install commands (`npm test`, `npm run build`, etc.) pass through to npm ins
 | **Maintainer changes** | New, removed, or fully replaced maintainers vs local cache | Critical on full replacement |
 | **Typosquatting** | Package names within edit distance 1-2 of top 500 popular packages | Critical if distance=1 from top 100 |
 | **Low downloads** | Packages with <100 weekly downloads, especially if published within 7 days | Critical if new + low |
+
+## AI agent safety
+
+npm-vet uses TTY detection to distinguish between humans and AI agents. When security findings are detected:
+
+- **Human in a terminal** → shown findings, prompted to type `INSTALL` to proceed
+- **AI agent or script** (non-interactive stdin) → **hard blocked**, exit code 1, no prompt, no way to override
+
+This is bulletproof — AI agents (Claude Code, Copilot, Cursor, etc.) run commands via piped subprocesses where stdin is not a TTY. They cannot allocate a real terminal. The agent will see the findings and be told to ask the user:
+
+```
+npm-vet: BLOCKED — non-interactive session detected (AI agent or script).
+npm-vet: Security findings require human review. Run this install manually in your terminal,
+npm-vet: or add the package to your .npm-vetrc allowlist.
+```
+
+If the package is legitimate, add it to your `.npm-vetrc` allowlist and the agent can install it freely on subsequent runs.
 
 ## CI/CD usage
 
@@ -108,7 +206,6 @@ Create a `.npm-vetrc` file in your project root (or `~/.npm-vetrc` for global co
 ```json
 {
   "allowlist": ["lodash", "express", "@types/*"],
-  "mode": "block",
   "fail_on": "critical",
   "analyzers": {
     "postinstall": true,
@@ -128,23 +225,6 @@ Create a `.npm-vetrc` file in your project root (or `~/.npm-vetrc` for global co
 ```
 
 The allowlist supports glob patterns (`@types/*` matches `@types/node`, `@types/react`, etc.).
-
-### AI agent safety
-
-npm-vet uses TTY detection to distinguish between humans and AI agents. When security findings are detected:
-
-- **Human in a terminal** → shown findings, prompted to type `INSTALL` to proceed
-- **AI agent or script** (non-interactive stdin) → **hard blocked**, exit code 1, no prompt, no way to override
-
-This is bulletproof — AI agents (Claude Code, Copilot, Cursor, etc.) run commands via piped subprocesses where stdin is not a TTY. They cannot allocate a real terminal. The agent will see the findings and be told to ask the user:
-
-```
-npm-vet: BLOCKED — non-interactive session detected (AI agent or script).
-npm-vet: Security findings require human review. Run this install manually in your terminal,
-npm-vet: or add the package to your .npm-vetrc allowlist.
-```
-
-If the package is legitimate, add it to your `.npm-vetrc` allowlist and the agent can install it freely on subsequent runs.
 
 ## Accessing npm-vet commands when installed as shim
 
