@@ -48,8 +48,20 @@ func FindRealNpm() (string, error) {
 		selfPath, _ = filepath.EvalSymlinks(selfPath)
 	}
 
+	// Determine our shim directory to skip it
+	home, _ := os.UserHomeDir()
+	shimDir := ""
+	if home != "" {
+		shimDir = filepath.Join(home, ".npm-vet", "bin")
+	}
+
 	pathEnv := os.Getenv("PATH")
 	for _, dir := range strings.Split(pathEnv, ";") {
+		// Skip our shim directory entirely
+		if shimDir != "" && strings.EqualFold(filepath.Clean(dir), filepath.Clean(shimDir)) {
+			continue
+		}
+
 		for _, name := range []string{"npm.cmd", "npm.exe", "npm"} {
 			candidate := filepath.Join(dir, name)
 			info, err := os.Stat(candidate)

@@ -9,16 +9,16 @@ import (
 	"strings"
 )
 
-// RunSetup creates a shim directory with an `npm` symlink pointing to npm-vet,
+// RunSetup creates a shim directory with an `npm` shim pointing to npm-vet,
 // and prints instructions to add it to PATH. This makes npm-vet transparently
 // intercept all `npm install` calls from any tool, script, or agent.
 func RunSetup(args []string) int {
-	// Determine shim directory
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "npm-vet setup: cannot determine home directory: %v\n", err)
 		return 2
 	}
+
 	shimDir := filepath.Join(home, ".npm-vet", "bin")
 
 	// Find our own binary path
@@ -39,12 +39,19 @@ func RunSetup(args []string) int {
 		return 2
 	}
 
+	// Create platform-specific shim
+	if runtime.GOOS == "windows" {
+		return setupWindows(args, shimDir, self, home)
+	}
+	return setupUnix(args, shimDir, self, home)
+}
+
+// setupUnix creates a symlink shim and updates the shell profile.
+func setupUnix(args []string, shimDir, self, home string) int {
 	shimPath := filepath.Join(shimDir, "npm")
 
-	// Remove existing shim if present
 	os.Remove(shimPath)
 
-	// Create symlink: ~/.npm-vet/bin/npm → /path/to/npm-vet
 	if err := os.Symlink(self, shimPath); err != nil {
 		fmt.Fprintf(os.Stderr, "npm-vet setup: cannot create symlink: %v\n", err)
 		return 2
@@ -52,36 +59,17 @@ func RunSetup(args []string) int {
 
 	fmt.Fprintf(os.Stderr, "✓ Created shim: %s → %s\n\n", shimPath, self)
 
-	// Check if already in PATH
-	pathEnv := os.Getenv("PATH")
-	alreadyInPath := false
-	for _, dir := range filepath.SplitList(pathEnv) {
-		if dir == shimDir {
-			alreadyInPath = true
-			break
-		}
-	}
-
-	if alreadyInPath {
+	if isInPath(shimDir) {
 		fmt.Fprintln(os.Stderr, "✓ Shim directory is already in your PATH.")
-		verifySetup(shimDir)
+		verifySetupUnix(shimDir)
 		return 0
 	}
 
-	// Detect shell and print appropriate instructions
 	shell := detectShell()
 	rcFile := shellRCFile(shell, home)
 	exportLine := fmt.Sprintf(`export PATH="%s:$PATH"`, shimDir)
 
-	// Check if --apply flag is set
-	apply := false
-	for _, arg := range args {
-		if arg == "--apply" {
-			apply = true
-		}
-	}
-
-	if apply && rcFile != "" {
+	if hasFlag(args, "--apply") && rcFile != "" {
 		if err := appendToFile(rcFile, exportLine); err != nil {
 			fmt.Fprintf(os.Stderr, "npm-vet setup: cannot update %s: %v\n", rcFile, err)
 			fmt.Fprintf(os.Stderr, "\nAdd this line manually to your shell profile:\n\n  %s\n\n", exportLine)
@@ -98,12 +86,83 @@ func RunSetup(args []string) int {
 		fmt.Fprintf(os.Stderr, "    %s\n\n", exportLine)
 	}
 
+	printFooter()
+	return 0
+}
+
+// setupWindows creates a batch script shim and updates the PATH via PowerShell profile or registry.
+func setupWindows(args []string, shimDir, self, home string) int {
+	// Create npm.cmd that forwards to npm-vet.exe
+	npmCmd := filepath.Join(shimDir, "npm.cmd")
+	batchContent := fmt.Sprintf("@echo off\r\n\"%s\" %%*\r\n", self)
+
+	if err := os.WriteFile(npmCmd, []byte(batchContent), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "npm-vet setup: cannot create npm.cmd: %v\n", err)
+		return 2
+	}
+
+	// Also create npm.ps1 for PowerShell direct invocation
+	npmPS1 := filepath.Join(shimDir, "npm.ps1")
+	ps1Content := fmt.Sprintf("& \"%s\" @args\r\n", self)
+
+	if err := os.WriteFile(npmPS1, []byte(ps1Content), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "npm-vet setup: warning: could not create npm.ps1: %v\n", err)
+		// Non-fatal — npm.cmd is sufficient
+	}
+
+	fmt.Fprintf(os.Stderr, "✓ Created shim: %s → %s\n", npmCmd, self)
+	fmt.Fprintln(os.Stderr)
+
+	if isInPath(shimDir) {
+		fmt.Fprintln(os.Stderr, "✓ Shim directory is already in your PATH.")
+		verifySetupWindows(shimDir)
+		return 0
+	}
+
+	if hasFlag(args, "--apply") {
+		// Update user PATH via PowerShell (persistent, user-level)
+		psCmd := fmt.Sprintf(
+			`[Environment]::SetEnvironmentVariable('Path', '%s;' + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')`,
+			shimDir,
+		)
+		cmd := exec.Command("powershell", "-NoProfile", "-Command", psCmd)
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "npm-vet setup: cannot update PATH via PowerShell: %v\n", err)
+			printWindowsManualInstructions(shimDir)
+			return 0
+		}
+
+		fmt.Fprintf(os.Stderr, "✓ Added %s to your user PATH.\n\n", shimDir)
+		fmt.Fprintln(os.Stderr, "Open a new terminal window to activate.")
+		fmt.Fprintln(os.Stderr)
+
+		// Also update the PowerShell profile for the current session pattern
+		psProfile := filepath.Join(home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1")
+		profileLine := fmt.Sprintf(`$env:Path = "%s;" + $env:Path`, shimDir)
+		appendToFile(psProfile, profileLine)
+	} else {
+		printWindowsManualInstructions(shimDir)
+	}
+
+	printFooter()
+	return 0
+}
+
+func printWindowsManualInstructions(shimDir string) {
+	fmt.Fprintln(os.Stderr, "Add the shim directory to your PATH. Either:")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "  Option 1: Run setup with --apply to auto-update your PATH:\n\n")
+	fmt.Fprintf(os.Stderr, "    npm-vet setup --apply\n\n")
+	fmt.Fprintf(os.Stderr, "  Option 2: Add manually via PowerShell (run as admin):\n\n")
+	fmt.Fprintf(os.Stderr, "    [Environment]::SetEnvironmentVariable('Path', '%s;' + $env:Path, 'User')\n\n", shimDir)
+	fmt.Fprintf(os.Stderr, "  Option 3: System Settings → Environment Variables → add %s to Path\n\n", shimDir)
+}
+
+func printFooter() {
 	fmt.Fprintln(os.Stderr, "Once active, ALL npm install calls will be intercepted — including")
 	fmt.Fprintln(os.Stderr, "from scripts, CI agents, IDE extensions, and other tools.")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "To disable: npm-vet teardown")
-
-	return 0
 }
 
 // RunTeardown removes the shim and PATH entry.
@@ -115,8 +174,15 @@ func RunTeardown(args []string) int {
 	}
 
 	shimDir := filepath.Join(home, ".npm-vet", "bin")
-	shimPath := filepath.Join(shimDir, "npm")
 
+	if runtime.GOOS == "windows" {
+		return teardownWindows(shimDir, home)
+	}
+	return teardownUnix(shimDir, home)
+}
+
+func teardownUnix(shimDir, home string) int {
+	shimPath := filepath.Join(shimDir, "npm")
 	if err := os.Remove(shimPath); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "npm-vet teardown: cannot remove shim: %v\n", err)
 		return 2
@@ -135,8 +201,27 @@ func RunTeardown(args []string) int {
 	return 0
 }
 
+func teardownWindows(shimDir, home string) int {
+	// Remove npm.cmd and npm.ps1
+	for _, name := range []string{"npm.cmd", "npm.ps1"} {
+		path := filepath.Join(shimDir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "npm-vet teardown: cannot remove %s: %v\n", name, err)
+		}
+	}
+
+	fmt.Fprintln(os.Stderr, "✓ Removed npm shim.")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "You may also want to remove %s from your user PATH:\n\n", shimDir)
+	fmt.Fprintf(os.Stderr, "  PowerShell:\n")
+	fmt.Fprintf(os.Stderr, "    $path = [Environment]::GetEnvironmentVariable('Path', 'User') -replace [regex]::Escape('%s;'), ''\n", shimDir)
+	fmt.Fprintf(os.Stderr, "    [Environment]::SetEnvironmentVariable('Path', $path, 'User')\n\n")
+	fmt.Fprintf(os.Stderr, "  Or: System Settings → Environment Variables → remove %s from Path\n\n", shimDir)
+
+	return 0
+}
+
 func detectShell() string {
-	// Check SHELL env var
 	shell := os.Getenv("SHELL")
 	if shell != "" {
 		return filepath.Base(shell)
@@ -152,7 +237,6 @@ func shellRCFile(shell, home string) string {
 	case "zsh":
 		return filepath.Join(home, ".zshrc")
 	case "bash":
-		// macOS uses .bash_profile, Linux uses .bashrc
 		if runtime.GOOS == "darwin" {
 			return filepath.Join(home, ".bash_profile")
 		}
@@ -164,12 +248,32 @@ func shellRCFile(shell, home string) string {
 	}
 }
 
+func isInPath(dir string) bool {
+	for _, d := range filepath.SplitList(os.Getenv("PATH")) {
+		if d == dir {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func appendToFile(path, line string) error {
-	// Check if line already exists
 	data, err := os.ReadFile(path)
 	if err == nil && strings.Contains(string(data), line) {
-		return nil // already present
+		return nil
 	}
+
+	dir := filepath.Dir(path)
+	os.MkdirAll(dir, 0o755)
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -181,8 +285,7 @@ func appendToFile(path, line string) error {
 	return err
 }
 
-func verifySetup(shimDir string) {
-	// Verify that `which npm` points to our shim
+func verifySetupUnix(shimDir string) {
 	out, err := exec.Command("which", "npm").Output()
 	if err != nil {
 		return
@@ -193,5 +296,20 @@ func verifySetup(shimDir string) {
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠ `which npm` resolves to %s (not the shim).\n", npmPath)
 		fmt.Fprintln(os.Stderr, "  Open a new terminal or source your shell profile.")
+	}
+}
+
+func verifySetupWindows(shimDir string) {
+	out, err := exec.Command("where", "npm").Output()
+	if err != nil {
+		return
+	}
+	// `where npm` returns all matches, one per line. Check if ours is first.
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[0]), shimDir) {
+		fmt.Fprintln(os.Stderr, "✓ `npm` now routes through npm-vet.")
+	} else {
+		fmt.Fprintf(os.Stderr, "⚠ `where npm` resolves to %s (not the shim).\n", strings.TrimSpace(lines[0]))
+		fmt.Fprintln(os.Stderr, "  Open a new terminal to activate, or check PATH order.")
 	}
 }
