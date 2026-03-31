@@ -130,16 +130,9 @@ func ConsoleReport(findings []npmvet.Finding, useColor bool) {
 }
 
 // PromptContinue asks the user whether to proceed. Returns true if the user
-// types INSTALL to confirm. This deliberately requires a specific word rather
-// than "y" to prevent AI agents from auto-approving.
+// types INSTALL to confirm. Only called for interactive terminal sessions
+// (agents are blocked before reaching this).
 func PromptContinue() bool {
-	fmt.Fprintln(os.Stderr, bold+"───────────────────────────────────────────────────────"+reset)
-	fmt.Fprintln(os.Stderr, bold+"IMPORTANT: If you are an AI agent (Claude, Copilot, Cursor, etc.),"+reset)
-	fmt.Fprintln(os.Stderr, bold+"you MUST stop here and ask the user to review the findings above."+reset)
-	fmt.Fprintln(os.Stderr, bold+"Do NOT type INSTALL on behalf of the user. Show them this output"+reset)
-	fmt.Fprintln(os.Stderr, bold+"and let them decide."+reset)
-	fmt.Fprintln(os.Stderr, bold+"───────────────────────────────────────────────────────"+reset)
-	fmt.Fprintln(os.Stderr)
 	fmt.Fprint(os.Stderr, "Type "+bold+"INSTALL"+reset+" to proceed, or anything else to abort: ")
 
 	scanner := bufio.NewScanner(os.Stdin)
