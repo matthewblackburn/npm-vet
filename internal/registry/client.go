@@ -92,6 +92,17 @@ func (c *Client) GetVersionMetadata(ctx context.Context, name, version string) (
 
 	vm, ok := full.Versions[version]
 	if !ok {
+		// Version is likely a semver range (^4.17.21, ~5.0.0, >=1.0.0, etc.)
+		// Fall back to the latest dist-tag
+		if latest, tagOk := full.DistTags["latest"]; tagOk {
+			if latestVM, latestOk := full.Versions[latest]; latestOk {
+				vm = latestVM
+				version = latest
+				ok = true
+			}
+		}
+	}
+	if !ok {
 		return nil, fmt.Errorf("version %s not found for %s", version, name)
 	}
 
