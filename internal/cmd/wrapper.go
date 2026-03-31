@@ -117,22 +117,44 @@ func RunWrapper(args []string) int {
 	// Report findings
 	reporter.ConsoleReport(result.Findings, true)
 
-	// Determine if we should prompt or block
-	hasCritical := false
+	// Check if any finding meets the fail_on threshold
+	threshold := npmvet.ParseSeverity(cfg.FailOn)
+	exceedsThreshold := false
 	for _, f := range result.Findings {
-		if f.Severity == npmvet.SeverityCritical {
-			hasCritical = true
+		if f.Severity.AtLeast(threshold) {
+			exceedsThreshold = true
 			break
 		}
 	}
 
-	// In strict mode: default to No on any finding
-	// In normal mode: default to No on critical, Yes on warnings only
-	defaultYes := !hasCritical && !cfg.Strict
+	mode := cfg.EffectiveMode()
 
-	if !reporter.PromptContinue(defaultYes) {
-		fmt.Fprintln(os.Stderr, "npm-vet: installation aborted.")
-		return 1
+	switch mode {
+	case config.ModeBlock:
+		// Hard block: no prompt, no override. Agents cannot bypass this.
+		if exceedsThreshold {
+			fmt.Fprintf(os.Stderr, "npm-vet: BLOCKED — findings at or above %q severity. Installation refused.\n", cfg.FailOn)
+			fmt.Fprintln(os.Stderr, "npm-vet: To allow this install, add the package to your .npm-vetrc allowlist.")
+			return 1
+		}
+		// Below threshold: proceed silently
+	case config.ModeReport:
+		// Report only: always proceed after showing findings
+		fmt.Fprintln(os.Stderr, "npm-vet: (report mode) proceeding with install.")
+	default: // ModePrompt
+		if exceedsThreshold {
+			// Default to No when findings exceed threshold
+			if !reporter.PromptContinue(false) {
+				fmt.Fprintln(os.Stderr, "npm-vet: installation aborted.")
+				return 1
+			}
+		} else {
+			// Below threshold but still has findings — default to Yes
+			if !reporter.PromptContinue(true) {
+				fmt.Fprintln(os.Stderr, "npm-vet: installation aborted.")
+				return 1
+			}
+		}
 	}
 
 	if err := delegator.ExecNpm(args); err != nil {

@@ -108,7 +108,7 @@ Create a `.npm-vetrc` file in your project root (or `~/.npm-vetrc` for global co
 ```json
 {
   "allowlist": ["lodash", "express", "@types/*"],
-  "strict": false,
+  "mode": "block",
   "fail_on": "critical",
   "analyzers": {
     "postinstall": true,
@@ -129,6 +129,18 @@ Create a `.npm-vetrc` file in your project root (or `~/.npm-vetrc` for global co
 
 The allowlist supports glob patterns (`@types/*` matches `@types/node`, `@types/react`, etc.).
 
+### Modes
+
+| Mode | Behavior | Use case |
+|---|---|---|
+| `prompt` | Show findings, ask user to continue (default) | Interactive local dev |
+| `block` | Hard exit 1 on findings >= `fail_on`. No prompt. Cannot be bypassed. | **AI agents, CI/CD, shared machines** |
+| `report` | Show findings but always proceed | Monitoring / gradual rollout |
+
+**To stop AI agents from auto-approving installs**, set `"mode": "block"` in your `.npm-vetrc`. In block mode, there is no prompt to answer — the install is simply refused and the agent must stop. The only way to proceed is to add the package to the allowlist.
+
+You can also set the mode via environment variable: `NPM_VET_MODE=block`.
+
 ## Accessing npm-vet commands when installed as shim
 
 When npm-vet is installed as the `npm` shim, access its subcommands via `npm vet`:
@@ -143,6 +155,7 @@ npm vet teardown           # disable interception
 
 | Variable | Description |
 |---|---|
+| `NPM_VET_MODE` | Override mode: `block`, `prompt`, or `report` |
 | `NPM_VET_NPM_PATH` | Override path to real npm binary |
 | `CI` | When set, disables colors and interactive prompts |
 

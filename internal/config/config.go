@@ -10,10 +10,18 @@ import (
 type Config struct {
 	Allowlist  []string            `json:"allowlist"`
 	Strict     bool                `json:"strict"`
+	Mode       string              `json:"mode"`    // "prompt" (default), "block", or "report"
 	FailOn     string              `json:"fail_on"` // "critical", "warning", "info"
 	Analyzers  map[string]bool     `json:"analyzers"`
 	Thresholds Thresholds          `json:"thresholds"`
 }
+
+// Mode constants
+const (
+	ModePrompt = "prompt" // Show findings, ask user (default). Agents can bypass.
+	ModeBlock  = "block"  // Hard exit 1 on findings >= fail_on. No prompt. No override.
+	ModeReport = "report" // Show findings but always proceed (log-only).
+)
 
 // Thresholds configures analyzer-specific thresholds.
 type Thresholds struct {
@@ -26,6 +34,7 @@ type Thresholds struct {
 // Default returns a Config with sensible defaults.
 func Default() Config {
 	return Config{
+		Mode:   ModePrompt,
 		FailOn: "critical",
 		Analyzers: map[string]bool{
 			"postinstall": true,
@@ -92,6 +101,20 @@ func homeConfig() string {
 		return path
 	}
 	return ""
+}
+
+// EffectiveMode returns the mode to use, checking the NPM_VET_MODE env var first.
+func (c Config) EffectiveMode() string {
+	if env := os.Getenv("NPM_VET_MODE"); env != "" {
+		switch env {
+		case ModeBlock, ModePrompt, ModeReport:
+			return env
+		}
+	}
+	if c.Mode != "" {
+		return c.Mode
+	}
+	return ModePrompt
 }
 
 // IsAnalyzerEnabled returns whether an analyzer is enabled in the config.
